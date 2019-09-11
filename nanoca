@@ -1,0 +1,714 @@
+#!/bin/bash
+
+if [ $# -lt 1 ]; then
+	echo "Usage: $0 pki_path"
+	exit 1
+fi
+
+MSG=">>> "
+
+function main_menu () {
+  # Menu constants
+  local MENU_INITIALIZE_CA="Initialize CA"
+  local MENU_ISSUE_CERT="Issue a certificate"
+  local MENU_ISSUE_CRL="Issue a CRL"
+  local MENU_REVOKE="Revoke a certificate"
+  local MENU_DUMP_CACERT="Dump the CA Certificate"
+  local MENU_SHOW_CACERT="Show the CA Certificate"
+  local MENU_DUMP_CRL="Dump the CRL"
+  local MENU_SHOW_CRL="Show the CRL"
+  local MENU_SHOW_CADB="Show the CA Database"
+  local MENU_EXPORT_CERT="Export a certificate"
+  local MENU_EXPORT_CACERT="Export the CA certificate"
+  local MENU_QUIT="Quit"
+
+  # Variables
+  local cmd
+  
+  clear
+  echo "+-----------------------------------------------------------------------+"
+  echo "|                           Main Menu                                   |"
+  echo "+-----------------------------------------------------------------------+"
+  echo
+  
+  select cmd in "$MENU_INITIALIZE_CA" "$MENU_ISSUE_CERT" "$MENU_ISSUE_CRL" \
+                "$MENU_REVOKE" "$MENU_EXPORT_CERT" "$MENU_SHOW_CADB" "$MENU_DUMP_CACERT" \
+                "$MENU_SHOW_CACERT" "$MENU_EXPORT_CACERT" "$MENU_DUMP_CRL" "$MENU_SHOW_CRL" "$MENU_QUIT"; do
+    
+    if [ -z "$cmd" ]; then
+      cmd="$REPLY"
+    fi
+    
+    case "$cmd" in
+    "$MENU_INITIALIZE_CA")
+      if is_ca_initialized; then
+        echo "${MSG}Error: CA is already initialized !"
+	continue
+      else
+        initialize_ca_menu
+      fi
+      ;;
+    "$MENU_DUMP_CACERT")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+      	dump_file "$pki_path/cacert.pem"
+      fi
+      ;;
+    "$MENU_EXPORT_CACERT")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+      	export_file "$pki_path/cacert.pem"
+      fi
+      ;;
+    "$MENU_DUMP_CRL")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+      	dump_file "$pki_path/crl.pem"
+      fi
+      ;;
+    "$MENU_ISSUE_CERT")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+        issue_cert_menu
+      fi
+      ;;
+    "$MENU_EXPORT_CERT")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+        export_cert_menu
+      fi
+      ;;
+    "$MENU_REVOKE")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+        revoke_menu
+      fi
+      ;;
+    "$MENU_ISSUE_CRL")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+        issue_crl
+      fi
+      ;;
+    "$MENU_SHOW_CACERT")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+        show_cert "$pki_path/cacert.pem"
+      fi
+      ;;
+    "$MENU_SHOW_CRL")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+        show_crl "$pki_path/crl.pem"
+      fi
+      ;;
+    "$MENU_SHOW_CADB")
+      if ! is_ca_initialized; then
+        echo "${MSG}Error: CA is not yet initialized !"
+	continue
+      else
+        show_cadb
+      fi
+      ;;
+    "$MENU_QUIT")
+      false
+      ;;
+    *)
+      echo "${MSG}Error: $cmd is not a valid command !"
+      continue
+      ;;
+    esac
+
+    return
+  done
+}
+
+function revoke_menu () {
+  clear
+  echo "+-----------------------------------------------------------------------+"
+  echo "|                         Revoke a certificate                          |"
+  echo "+-----------------------------------------------------------------------+"
+  echo
+
+  local torevoke=""
+  local serial=""
+
+  show_cadb
+  while [ -z "$torevoke" ]; do
+    read -p "${MSG}Serial number (\"l\" to show the CA DB, \"q\" to quit): " serial
+    case "$serial" in
+    l)
+      show_cadb
+      continue
+      ;;
+    q)
+      return 0
+      ;;
+    *)
+      if [ -e "$certs_path/$serial.pem" ]; then
+        torevoke="$serial"
+      else
+        echo "${MSG}Unknown certificate with serial '$serial' !"
+        echo
+      fi
+      ;;
+    esac
+    
+  done
+  
+  trap "rm -f \"\$OPENSSL_CONF\"" RETURN
+  cat <<EOF > "$OPENSSL_CONF"
+$OPENSSL_CA_SECTION
+EOF
+  my_openssl ca -revoke "$pki_path/certs/$serial.pem"
+  local ret="$?"
+  if [ "$ret" -eq 0 ]; then
+    pause
+    echo
+    echo "${MSG}Issuing CRL..."
+    issue_crl
+    ret="$?"
+  fi
+  
+  pause
+  return "$ret"
+}
+
+function export_cert_menu () {
+  clear
+  echo "+-----------------------------------------------------------------------+"
+  echo "|                         Export a certificate                          |"
+  echo "+-----------------------------------------------------------------------+"
+  echo
+
+  local toexport=""
+  local serial=""
+
+  show_cadb
+  while [ -z "$toexport" ]; do
+    read -p "${MSG}Serial number (\"l\" to show the CA DB, \"q\" to quit): " serial
+    case "$serial" in
+    l)
+      show_cadb
+      continue
+      ;;
+    q)
+      return 0
+      ;;
+    *)
+      if [ -e "$certs_path/$serial.pem" ]; then
+        toexport="$serial"
+      else
+        echo "${MSG}Unknown certificate with serial '$serial' !"
+        echo
+      fi
+      ;;
+    esac
+  done
+  
+  export_file "$certs_path/$serial.pem"
+}
+
+function export_file () {
+  local ret="0"
+  echo
+  echo "${MSG}Where do you want to save the file (leave blank to cancel) ?"
+  read -e -p "${MSG}Path: " path
+  if [ -n "$path" ]; then
+    cp "$1" "$path"
+    ret="$?"
+    pause
+  fi
+  
+  return "$ret"
+}
+
+function initialize_ca_menu () {
+  # Menu constants
+  local MENU_QUIT="Back"
+  local MENU_DOIT="Commit"
+  local MENU_SET_DN="Set the certificate DN"
+  local MENU_SET_VALIDITY="Set the validity period"
+  local MENU_SET_SIZE="Set the key size"
+
+  # Variables
+  local cmd
+  local ca_dn="/C=FR/O=$OWNER_NAME/OU=$OWNER_DOMAIN/CN=Root CA of $OWNER_DOMAIN"
+  local validity="3650"
+  local key_size="2048"
+
+  while true; do
+    clear
+    echo "+-----------------------------------------------------------------------+"
+    echo "|                          Initialize the CA                            |"
+    echo "+-----------------------------------------------------------------------+"
+    echo
+    echo "DN: $ca_dn"
+    echo "Validity (days): $validity"
+    echo "Key size: $key_size"
+    echo
+
+    select cmd in "$MENU_SET_DN" "$MENU_SET_VALIDITY" "$MENU_SET_SIZE" "$MENU_DOIT" \
+                  "$MENU_QUIT"; do
+      
+      if [ -z "$cmd" ]; then
+        cmd="$REPLY"
+      fi
+      
+      case "$cmd" in
+      "$MENU_SET_DN")
+        read -p "${MSG}DN: " ca_dn
+        ;;
+      "$MENU_SET_VALIDITY")
+        read -p "${MSG}Validity (days): " validity
+        ;;
+      "$MENU_SET_SIZE")
+        read -p "${MSG}Key Size: " key_size
+        ;;
+      "$MENU_QUIT")
+        return
+        ;;
+      "$MENU_DOIT")
+        initialize_ca
+        return $?
+        ;;
+      *)
+        echo "${MSG}Error: $cmd is not a valid command !"
+        continue
+        ;;
+      esac
+
+      break
+    done
+  done
+}
+
+function initialize_ca () {
+  clear
+  trap "rm -f \"\$OPENSSL_CONF\"" RETURN
+
+  local protect_opt=""
+  if [ -z "$CA_PROTECT" ]; then
+    protect_opt="-nodes"
+  fi
+
+  cat <<EOF > "$OPENSSL_CONF"
+[ req ]
+default_bits            = $key_size
+default_keyfile         = $private_path/cakey.pem
+default_md              = $HASH_ALGO
+
+prompt                  = no
+x509_extensions         = rootca_extensions
+distinguished_name	= rootca_dn
+
+[ rootca_dn ]
+$(openssl_dn "$ca_dn")
+
+[ rootca_extensions ]
+basicConstraints        = critical, CA:true, pathlen:0
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid
+keyUsage                = critical, cRLSign, keyCertSign
+EOF
+
+  # Generate the keys and the certificate
+  my_openssl req -set_serial 0 -days "$validity" -x509 -newkey rsa: -outform PEM \
+	      $protect_opt -out "$pki_path/cacert.pem"
+
+  local ret="$?"
+  if [ "$ret" -eq 0 ]; then
+    echo '01' > "$pki_path/serial"
+    echo '01' > "$pki_path/crlserial"
+    touch "$pki_path/index.txt"
+    touch "$pki_path/index.txt.attr"
+    issue_crl
+  fi
+
+  pause
+  return "$ret"
+}
+
+function openssl_dn () {
+  echo "$1" |sed 's/\//\n/g'
+}
+
+function my_openssl () {
+  # Strip out the informative messages on stderr
+  openssl "$@" 2> >(egrep -v '^Using configuration from' 1>&2)
+  local ret=$?
+  # Ugly(tm): Wait for the "egrep" child process
+  sleep .3
+  return $ret;
+}
+
+function is_ca_initialized () {
+  test -e "$pki_path/cacert.pem"
+}
+
+function pause () {
+  echo
+  read -p "Press enter to continue... "
+}
+
+function dump_file () {
+  clear
+  cat "$1"
+  local ret="$?"
+  pause
+  return "$ret"
+}
+
+function issue_cert_menu () {
+  # Menu constants
+  local MENU_QUIT="Back"
+  local MENU_DOIT="Commit"
+  local MENU_SET_CN="Set the certificate CN"
+  local MENU_SET_DNS="Set the certificate SAN (Subject Alt Name)"
+  local MENU_SET_VALIDITY="Set the validity period"
+
+  # Variables
+  local cmd
+  local cn
+  local dn="/C=FR/O=$OWNER_NAME/OU=$OWNER_DOMAIN/CN=My Server"
+  local validity="730"
+  local san=""
+
+  while true; do
+    clear
+    echo "+-----------------------------------------------------------------------+"
+    echo "|                       Issue a Certificate (1/2)                       |"
+    echo "+-----------------------------------------------------------------------+"
+    echo
+    echo "DN: $dn"
+    echo "Validity (days): $validity"
+    echo "Subject Alt Name: $san"
+    echo
+
+    select cmd in "$MENU_SET_CN" "$MENU_SET_DNS" "$MENU_SET_VALIDITY" "$MENU_DOIT" \
+                  "$MENU_QUIT"; do
+      
+      if [ -z "$cmd" ]; then
+        cmd="$REPLY"
+      fi
+      
+      case "$cmd" in
+      "$MENU_SET_CN")
+	echo
+        echo "${MSG}The \"Common Name\" of your server can be its FQDN or anything else."
+	echo "${MSG}Examples: \"My Web Server\", \"myserver.$OWNER_DOMAIN\" or \"*.$OWNER_DOMAIN\"".
+	echo
+        read -p "${MSG}The \"Common Name\" of your server: " cn
+  	dn="/C=FR/O=$OWNER_NAME/OU=$OWNER_DOMAIN/CN=$cn"
+        ;;
+      "$MENU_SET_VALIDITY")
+        read -p "${MSG}Validity (days): " validity
+        ;;
+      "$MENU_SET_DNS")
+	echo
+        echo "${MSG}The Subject Alt Name can contain DNS, IP, email or URI addresses."
+	echo "${MSG}Prefix each SAN by its type and separate each SAN by a \",\"."
+	echo "${MSG}Example: \"DNS:myserver.$OWNER_DOMAIN,IP:192.168.16.4\""
+	echo
+        read -p "${MSG}Subject Alt Name (leave empty to disable the SAN): " san
+        ;;
+      "$MENU_QUIT")
+        return
+        ;;
+      "$MENU_DOIT")
+        issue_cert
+        return $?
+        ;;
+      *)
+        echo "${MSG}Error: $cmd is not a valid command !"
+        continue
+        ;;
+      esac
+
+      break
+    done
+  done
+}
+
+function issue_cert () {
+  clear
+  echo "+-----------------------------------------------------------------------+"
+  echo "|                       Issue a Certificate (2/2)                       |"
+  echo "+-----------------------------------------------------------------------+"
+  echo
+
+  trap "rm -f \"\$OPENSSL_CONF\" \"$tmp_path/lastcert.pem\"" RETURN
+
+  local san_ext
+  if [ -n "$san" ]; then
+    san_ext="subjectAltName = $san"
+  fi
+  cat <<EOF > "$OPENSSL_CONF"
+$OPENSSL_CA_SECTION
+
+default_days		= $validity
+prompt                  = no
+distinguished_name      = certificate_dn
+x509_extensions         = certificate_extensions
+policy                  = policy_any
+
+[ policy_any ]
+countryName            = supplied
+organizationName       = supplied
+organizationalUnitName = supplied
+commonName             = supplied
+
+[ certificate_extensions ]
+basicConstraints        = critical, CA:false
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid,issuer
+keyUsage                = critical,digitalSignature,keyEncipherment
+$san_ext
+crlDistributionPoints   = URI:$CDP_URL
+extendedKeyUsage	= serverAuth
+EOF
+
+  local csr_path=""
+  read -e -p "${MSG}CSR Path: " csr_path
+  while [ ! -r "$csr_path" ]; do 
+    echo "${MSG}\"$csr_path\" does not exist !"
+    read -e -p "${MSG}CSR Path: " csr_path
+  done
+
+  rm -f "$tmp_path/lastcert.pem"
+
+  # Generate the certificate
+  my_openssl ca -subj "$dn" -utf8 -in "$csr_path" -notext -out "$tmp_path/lastcert.pem"
+  local ret="$?"
+  
+  pause
+
+  if [ "$ret" -eq 0 ]; then
+    export_file "$tmp_path/lastcert.pem"
+    ret="$?"
+  fi
+  
+  return "$ret"
+}
+
+function issue_crl () {
+  trap "rm -f \"\$OPENSSL_CONF\"" RETURN
+  cat <<EOF > "$OPENSSL_CONF"
+$OPENSSL_CA_SECTION
+EOF
+  my_openssl ca -gencrl -utf8 -notext -out "$pki_path/crl.pem" \
+    && my_openssl crl -inform PEM -in "$pki_path/crl.pem" -outform DER -out "$CRL_PATH"
+}
+
+function show_cert () {
+  clear 
+
+  my_openssl x509 -noout -text -in "$1" | less
+}
+
+function show_crl () {
+  clear 
+
+  my_openssl crl -noout -text -in "$1" | less
+}
+
+function show_cadb () {
+  clear 
+
+  sed -r 's/^V\s+[0-9]+Z\s+([0-9a-zA-Z]+)\s+unknown\s+(.*)$/\1) \2/; t; d' "$pki_path/index.txt" |less
+}
+
+function init_conf () {
+  # Default values
+  HASH_ALGO="sha1"
+
+  # Initialization Wizard
+  clear
+  echo "+-----------------------------------------------------------------------+"
+  echo "|                        Initialization Wizard                          |"
+  echo "+-----------------------------------------------------------------------+"
+  echo
+  echo "What is your name (ex: Nicolas MASSE) ?"
+  while [ -z "$OWNER_NAME" ]; do read -p "${MSG}Your name is: " OWNER_NAME; done
+  echo
+  echo "Which domain name do you initialize (ex: itix.fr) ?"
+  while [ -z "$OWNER_DOMAIN" ]; do 
+    read -p "${MSG}Your DNS domain name is: " OWNER_DOMAIN
+  done
+  echo
+  echo "Where do you want to publish the CRL (ex: http://pki.$OWNER_DOMAIN/ca.crl) ?"
+  while [ -z "$CDP_URL" ]; do 
+    read -p "${MSG}The CRL will be published at: " CDP_URL
+  done
+  while [ -z "$CRL_PATH" ]; do 
+    read -e -p "${MSG}Local CRL path (ex: /var/www/ca.crl): " CRL_PATH
+  done
+  echo
+  while [ -z "$CRL_VALIDITY" ]; do
+    read -p "${MSG}CRL validity period, in days (\"30\" is a good value): " CRL_VALIDITY
+  done
+  echo
+  echo "${MSG}Protect the CA key with a password (yes/no) ?"
+  local cmd=""
+  select cmd in "Yes" "No"; do
+    
+    if [ -z "$cmd" ]; then
+      cmd="$REPLY"
+    fi
+    
+    case "$cmd" in
+    [yY]*)
+      CA_PROTECT="y"
+      break;
+      ;;
+    [nN]*)
+      CA_PROTECT=""
+      break;
+      ;;
+    *)
+      echo "Unknown response '$cmd' !"
+      continue
+      ;;
+    esac
+  done
+
+  echo
+  echo "Thanks !"
+
+  # Save the conf
+  save_conf
+  local ret="$?"
+
+  pause
+  return "$ret"
+}
+
+function save_conf () {
+  cat <<EOC > "$conf_path"
+OWNER_NAME="$OWNER_NAME"
+OWNER_DOMAIN="$OWNER_DOMAIN"
+HASH_ALGO="$HASH_ALGO"
+CDP_URL="$CDP_URL"
+CRL_PATH="$CRL_PATH"
+CRL_VALIDITY="$CRL_VALIDITY"
+CA_PROTECT="$CA_PROTECT"
+EOC
+}
+
+# Safe mask
+umask 077
+
+# The CA directory
+pki_path="$1"
+if [ ! -e "$pki_path" ]; then
+  echo "${MSG}$pki_path does not exist. Do you want to create it (yes/no) ?"
+  cmd=""
+  select cmd in "Yes" "No"; do
+    
+    if [ -z "$cmd" ]; then
+      cmd="$REPLY"
+    fi
+    
+    case "$cmd" in
+    [yY]*)
+      # Nothing to do
+      break;
+      ;;
+    [nN]*)
+      exit 0
+      ;;
+    *)
+      echo "Unknown response '$cmd' !"
+      continue
+      ;;
+    esac
+  done
+  mkdir "$pki_path" || exit $?
+fi
+
+tmp_path="$pki_path/tmp"
+if [ ! -e "$tmp_path" ]; then
+  mkdir "$tmp_path" || exit $?
+fi
+
+certs_path="$pki_path/certs"
+if [ ! -e "$certs_path" ]; then
+  mkdir "$certs_path" || exit $?
+fi
+
+private_path="$pki_path/private"
+if [ ! -e "$private_path" ]; then
+  mkdir "$private_path" || exit $?
+fi
+
+conf_path="$pki_path/nanoca.conf"
+if [ -e "$conf_path" ]; then
+  . "$conf_path"
+else
+  init_conf || exit $?
+fi
+
+
+# OpenSSL Conf.
+export OPENSSL_CONF="$tmp_path/openssl.cnf"
+OPENSSL_CA_SECTION="
+[ ca ]
+default_ca              = CA_default
+
+[ CA_default ]
+default_md		= $HASH_ALGO
+dir			= $pki_path
+database		= $pki_path/index.txt
+new_certs_dir		= $pki_path/certs
+certificate		= $pki_path/cacert.pem
+serial			= $pki_path/serial
+crlnumber		= $pki_path/crlserial
+private_key             = $private_path/cakey.pem
+RANDFILE		= $private_path/.rand
+email_in_dn		= no
+copy_extensions		= none
+unique_subject		= no
+name_opt		= ca_default
+cert_opt		= ca_default
+default_crl_days	= $CRL_VALIDITY
+"
+
+# Automatic processing
+if [ -n "$2" ]; then
+  case "$2" in
+  crl)
+    issue_crl
+    ;;
+  *)
+    echo "Unknown action \"$2\" !"
+    echo
+    echo "Valid actions are :"
+    echo " - crl: Issues a CRL"
+    echo
+    false
+    ;;
+  esac
+  exit $?
+fi
+
+# Main loop
+while main_menu; do :; done
+
